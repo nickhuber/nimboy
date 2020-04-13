@@ -25,7 +25,7 @@ const bootROM: array[0x100, uint8] = [
 
 
 type
-  MemoryBus = object
+  MemoryBus* = object
     bootrom_mapped: bool
     boot: array[0x100, uint8]
     cartridge: array[0x8000, uint8]
@@ -38,7 +38,6 @@ type
 
 
 proc reset*(this: var MemoryBus): void =
-  this.bootrom_mapped = true
   this.boot = bootROM
   this.sram.fill(0)
   this.vram.fill(0)
@@ -53,79 +52,81 @@ proc initializeCartridgeData*(this: var MemoryBus, cartridgeData: string): void 
     this.cartridge[i] = cast[uint8](b)
 
 
-proc at*(this: MemoryBus, address: uint16): uint8 =
-  if this.bootrom_mapped and address < 0x100:
+proc retrieve*(this: MemoryBus, address: uint16): uint8 =
+  # Writing a 1 to 0x50 in the io memory removed the bootrom from being accessed again.
+  # This is the last thing that the bootrom does
+  if this.io[0x50] == 0 and address < 0x100:
     return this.boot[address]
-  elif address <= 0x7fff:
+  elif address <= 0x7FFF:
     return this.cartridge[address]
 
-  elif address >= 0xa000 and address <= 0xbfff:
-    return this.sram[address - 0xa000]
+  elif address >= 0xA000 and address <= 0xBFFF:
+    return this.sram[address - 0xA000]
 
-  elif address >= 0x8000 and address <= 0x9fff:
+  elif address >= 0x8000 and address <= 0x9FFF:
     return this.vram[address - 0x8000]
 
-  elif address >= 0xc000 and address <= 0xdfff:
-    return this.wram[address - 0xc000]
+  elif address >= 0xC000 and address <= 0xDFFF:
+    return this.wram[address - 0xC000]
 
-  elif address >= 0xe000 and address <= 0xfdff:
-    return this.wram[address - 0xe000]
+  elif address >= 0xE000 and address <= 0xFDFF:
+    return this.wram[address - 0xE000]
 
-  elif address >= 0xfe00 and address <= 0xfeff:
-    return this.oam[address - 0xfe00]
+  elif address >= 0xFE00 and address <= 0xFEFF:
+    return this.oam[address - 0xFE00]
 
-  elif address == 0xff04:
+  elif address == 0xFF04:
     # TODO: Should return a div timer to be properly accurate
     return cast[uint8](rand(255))
 
-  # elif address == 0xff40:
+  # elif address == 0xFF40:
   #   return gpu.control
-  # elif address == 0xff42:
+  # elif address == 0xFF42:
   #   return gpu.scrollY
-  # elif address == 0xff43:
+  # elif address == 0xFF43:
   #   return gpu.scrollX
-  # elif address == 0xff44:
+  # elif address == 0xFF44:
   #   return gpu.scanline
 
-  # elif address == 0xff00:
+  # elif address == 0xFF00:
   #   if not bitand(io[0x00], 0x20):
-  #     return (unsigned char)(0xc0 | keys.keys1 | 0x10)
+  #     return (unsigned char)(0xC0 | keys.keys1 | 0x10)
 
   #   elif(!(io[0x00] & 0x10)) {
-  #     return (unsigned char)(0xc0 | keys.keys2 | 0x20)
+  #     return (unsigned char)(0xC0 | keys.keys2 | 0x20)
   #   }
 
-  #   elif(!(io[0x00] & 0x30)) return 0xff
+  #   elif(!(io[0x00] & 0x30)) return 0xFF
   #   else return 0
   # }
 
-  # elif address == 0xff0f:
+  # elif address == 0xFF0F:
   #   return interrupt.flags
-  # elif address == 0xffff:
+  # elif address == 0xFFFF:
   #   return interrupt.enable
 
-  elif address >= 0xff80 and address <= 0xfffe:
-    return this.hram[address - 0xff80]
+  elif address >= 0xFF80 and address <= 0xFFFE:
+    return this.hram[address - 0xFF80]
 
-  elif address >= 0xff00 and address <= 0xff7f:
-    return this.io[address - 0xff00]
+  elif address >= 0xFF00 and address <= 0xFF7F:
+    return this.io[address - 0xFF00]
 
   return 0
 
 
-proc at16*(this: MemoryBus, address: uint16): uint16 =
-  var ret: uint16 = cast[uint16](this.at(address))
-  ret += cast[uint16](this.at(address + 1)) * 256
+proc retrieve16*(this: MemoryBus, address: uint16): uint16 =
+  var ret: uint16 = cast[uint16](this.retrieve(address))
+  ret += cast[uint16](this.retrieve(address + 1)) * 256
   return ret
 
 
-proc set*(this: var MemoryBus, address: uint16, value: uint8): void =
+proc assign*(this: var MemoryBus, address: uint16, value: uint8): void =
   if address >= 0xA000 and address <= 0xBFFF:
     this.sram[address - 0xA000] = value;
   elif address >= 0x8000 and address <= 0x9FFF:
     this.vram[address - 0x8000] = value
     # TODO update graphics info?
-  elif address >= 0xC000 and address <= 0xdFFF:
+  elif address >= 0xC000 and address <= 0xDFFF:
     this.wram[address - 0xC000] = value
   elif address >= 0xE000 and address <= 0xFDFF:
     this.wram[address - 0xE000] = value
@@ -154,8 +155,6 @@ proc set*(this: var MemoryBus, address: uint16, value: uint8): void =
   # elif address == 0xFF49:
   #   int i;
   #   for(i = 0; i < 4; i++) spritePalette[1][i] = palette[(value >> (i * 2)) & 3];
-  elif address == 0xff50:
-    this.bootrom_mapped = false
   elif address >= 0xFF00 and address <= 0xFF7F:
     this.io[address - 0xFF00] = value;
 
@@ -164,9 +163,6 @@ proc set*(this: var MemoryBus, address: uint16, value: uint8): void =
   # elif address == 0xFFFF:
   #   interrupt.enable = value;
 
-proc set16*(this: var MemoryBus, address: uint16, value: uint16): void =
-  this.set(address, cast[uint8](bitand(value, 0x00FF)))
-  this.set(address + 1, cast[uint8](bitand(value, 0xFF00) div 256))
-
-
-export MemoryBus
+proc assign16*(this: var MemoryBus, address: uint16, value: uint16): void =
+  this.assign(address, cast[uint8](bitand(value, 0x00FF)))
+  this.assign(address + 1, cast[uint8](bitand(value, 0xFF00) div 256))
