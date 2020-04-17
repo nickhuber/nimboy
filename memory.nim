@@ -79,32 +79,6 @@ proc retrieve*(this: MemoryBus, address: uint16): uint8 =
     # TODO: Should return a div timer to be properly accurate
     return cast[uint8](rand(255))
 
-  # elif address == 0xFF40:
-  #   return gpu.control
-  # elif address == 0xFF42:
-  #   return gpu.scrollY
-  # elif address == 0xFF43:
-  #   return gpu.scrollX
-  # elif address == 0xFF44:
-  #   return gpu.scanline
-
-  # elif address == 0xFF00:
-  #   if not bitand(io[0x00], 0x20):
-  #     return (unsigned char)(0xC0 | keys.keys1 | 0x10)
-
-  #   elif(!(io[0x00] & 0x10)) {
-  #     return (unsigned char)(0xC0 | keys.keys2 | 0x20)
-  #   }
-
-  #   elif(!(io[0x00] & 0x30)) return 0xFF
-  #   else return 0
-  # }
-
-  # elif address == 0xFF0F:
-  #   return interrupt.flags
-  # elif address == 0xFFFF:
-  #   return interrupt.enable
-
   elif address >= 0xFF80 and address <= 0xFFFE:
     return this.hram[address - 0xFF80]
 
@@ -136,36 +110,12 @@ proc assign*(this: var MemoryBus, address: uint16, value: uint8): void =
     this.oam[address - 0xFE00] = value
   elif address >= 0xFF80 and address <= 0xFFFE:
     this.hram[address - 0xFF80] = value
-  # elif address == 0xFF40:
-  #   gpu.control = value
-  # elif address == 0xFF42:
-  #   gpu.scrollY = value
-  # elif address == 0xFF43:
-  #   gpu.scrollX = value
-  # elif address == 0xFF46:
-  #   # TODO: OAM DMA
-  #   copy(0xFE00, value << 8, 160)
-
-  # elif address == 0xFF47:
-  #  int i;
-  #  for(i = 0; i < 4; i++) backgroundPalette[i] = palette[(value >> (i * 2)) & 3];
-
-  # elif address == 0xFF48:
-  #   int i;
-  #   for(i = 0; i < 4; i++) spritePalette[0][i] = palette[(value >> (i * 2)) & 3];
-
-  # elif address == 0xFF49:
-  #   int i;
-  #   for(i = 0; i < 4; i++) spritePalette[1][i] = palette[(value >> (i * 2)) & 3];
   elif address >= 0xFF00 and address <= 0xFF7F:
     this.io[address - 0xFF00] = value;
   else:
     echo "UHANDLED MEMORY WRITE EVENT FOR 0x", toHex(value), " => 0x", toHex(address)
     quit()
-  # elif address == 0xFF0F:
-  #   interrupt.flags = value;
-  # elif address == 0xFFFF:
-  #   interrupt.enable = value;
+
 
 proc assign16*(this: var MemoryBus, address: uint16, value: uint16): void =
   this.assign(address, cast[uint8](bitand(value, 0x00FF)))

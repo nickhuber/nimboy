@@ -19,6 +19,13 @@ proc getOperand(this: var CPU): uint8 =
 proc getOperand16(this: var CPU): uint16 =
   return this.bus.retrieve16(this.registers.pc + 1)
 
+# On 8 bit operations, a half-carry happens on the 3rd bit
+func hasHalfCarry(value1: uint8, value2: uint8): bool {.inline.} =
+  if bitand(bitand(value1, 0x0F) + bitand(value2, 0x0F), 0x1F) == 0x10:
+    return true
+  else:
+    return false
+
 # On 16 bit operations, a half-carry happens on the 11th bit
 func hasHalfCarry16(value1: uint16, value2: uint16): bool {.inline.} =
   if bitand(bitand(value1, 0x0FFF) + bitand(value2, 0x0FFF), 0x1FFF) == 0x10000:
@@ -26,11 +33,40 @@ func hasHalfCarry16(value1: uint16, value2: uint16): bool {.inline.} =
   else:
     return false
 
+func genericRelativeJump(this: var CPU, jump: uint8): uint16 =
+  let offset: int8 = cast[int8](jump)
+  # This is some crazy looking nonsense but is why you shouldn't mix signed
+  # and unsigned types
+  return cast[uint16](cast[int16](this.registers.pc) + cast[int16](offset)) + 2
+
+# Add value into register A
+proc genericAdd(this: var CPU, value: uint8): void =
+  let ret: uint16 = this.registers.a + value
+  this.registers.a = cast[uint8](ret)
+  this.registers.f.carry = if ret >= 0x00FF: 1 else: 0
+  this.registers.f.half_carry = if hasHalfCarry(this.registers.a, value): 1 else: 0
+  this.registers.f.subtract = 0
+  this.registers.f.zero = this.registers.a
+
 proc genericAdd16(this: var CPU, value1: uint16, value2: uint16): uint16 =
   let ret: uint32 = value1 + value2
   this.registers.f.carry = if ret > 0xFFFF: 1 else: 0
   this.registers.f.half_carry = if hasHalfCarry16(value1, value2): 1 else: 0
   return cast[uint16](ret)
+
+proc genericAnd(this: var CPU, value: uint8): void =
+  this.registers.a = bitand(this.registers.a, value)
+  this.registers.f.zero = if this.registers.a == 0: 1 else: 0
+  this.registers.f.carry = 0
+  this.registers.f.subtract = 0
+  this.registers.f.half_carry = 1
+
+proc genericSubtract(this: var CPU, value: uint8): void =
+  this.registers.f.subtract = 1
+  this.registers.f.carry = if this.registers.a < value: 1 else: 0
+  this.registers.f.half_carry = if bitand(this.registers.a, 0x0F) < bitand(value, 0x0F): 1 else: 0
+  this.registers.a -= value
+  this.registers.f.zero = if this.registers.a == 0: 1 else: 0
 
 proc genericRotate(this: var CPU, value: uint8): uint8 =
   let carry: uint8 = if this.registers.f.carry == 1: 1 else: 0
@@ -86,17 +122,32 @@ proc handleLD_BC_NN(this: var CPU): uint16 =
   this.registers.set_bc(this.getOperand16())
   return this.registers.pc + 3
 
-proc handleLD_BCP_A(this: var CPU): uint16 = 
+proc handleLD_BCP_A(this: var CPU): uint16 =
   this.bus.assign(this.registers.get_bc(), this.registers.a)
   return this.registers.pc + 1
 
-proc handleDEC_B(this: var CPU): uint16 = 
+# Increment 16-bit BC
+proc handleINC_BC(this: var CPU): uint16 =
+  this.registers.set_bc(this.genericAdd16(this.registers.get_bc(), 1'u16))
+  return this.registers.pc + 1
+
+proc handleDEC_B(this: var CPU): uint16 =
   this.registers.b = this.genericDec(this.registers.b)
   return this.registers.pc + 1
 
 proc handleLD_B_N(this: var CPU): uint16 =
   this.registers.b = this.getOperand()
   return this.registers.pc + 2
+
+# # Save SP to given address
+proc handleLD_NNP_SP(this: var CPU): uint16 =
+  this.bus.assign16(this.getOperand16(), this.registers.sp)
+  return this.registers.pc + 3
+
+# Load A from address pointed to by BC
+proc handleLD_A_BCP(this: var CPU): uint16 =
+  this.registers.a = this.bus.retrieve(this.registers.get_bc())
+  return this.registers.pc + 1
 
 proc handleINC_C(this: var CPU): uint16 =
   this.registers.c = this.genericInc(this.registers.c)
@@ -135,9 +186,7 @@ proc handleLD_A_DEP(this: var CPU): uint16 =
 
 proc handleJR_NZ_N(this: var CPU): uint16 =
   if this.registers.f.zero == 0:
-    let offset: int8 = cast[int8](this.getOperand())
-    # This is some crazy looking nonsense but is why you shouldn't mix signed and unsigned types
-    return cast[uint16](cast[int16](this.registers.pc) + cast[int16](offset)) + 2
+    return this.genericRelativeJump(this.getOperand())
   else:
     return this.registers.pc + 2
 
@@ -163,6 +212,13 @@ proc handleLD_SP_NN(this: var CPU): uint16 =
   this.registers.sp = this.getOperand16()
   return this.registers.pc + 3
 
+# Relative jump by signed immediate if last result caused no carry
+proc handleJR_NC_N(this: var CPU): uint16 =
+  if this.registers.f.carry == 0:
+    return this.genericRelativeJump(this.getOperand())
+  else:
+    return this.registers.pc + 3
+
 # Save A to address pointed by HL, and decrement HL
 proc handleLDD_HLP_A(this: var CPU): uint16 =
   let hl = this.registers.get_hl()
@@ -174,6 +230,70 @@ proc handleLD_A_N(this: var CPU): uint16 =
   this.registers.a = this.getOperand()
   return this.registers.pc + 2
 
+# Copy C to B
+proc handleLD_B_C(this: var CPU): uint16 =
+  this.registers.b = this.registers.c
+  return this.registers.pc + 1
+
+# Copy D to B
+proc handleLD_B_D(this: var CPU): uint16 =
+  this.registers.b = this.registers.d
+  return this.registers.pc + 1
+
+# Copy E to B
+proc handleLD_B_E(this: var CPU): uint16 =
+  this.registers.b = this.registers.e
+  return this.registers.pc + 1
+
+# Copy H to B
+proc handleLD_B_H(this: var CPU): uint16 =
+  this.registers.b = this.registers.h
+  return this.registers.pc + 1
+
+# Copy L to B
+proc handleLD_B_L(this: var CPU): uint16 =
+  this.registers.b = this.registers.l
+  return this.registers.pc + 1
+
+proc handleLD_B_HLP(this: var CPU): uint16 =
+  this.registers.b = this.bus.retrieve(this.registers.get_hl())
+  return this.registers.pc + 1
+
+# Copy A to B
+proc handleLD_B_A(this: var CPU): uint16 =
+  this.registers.b = this.registers.a
+  return this.registers.pc + 1
+
+# Copy B to C
+proc handleLD_C_B(this: var CPU): uint16 =
+  this.registers.c = this.registers.b
+  return this.registers.pc + 1
+
+# Copy D to C
+proc handleLD_C_D(this: var CPU): uint16 =
+  this.registers.c = this.registers.d
+  return this.registers.pc + 1
+
+# Copy E to C
+proc handleLD_C_E(this: var CPU): uint16 =
+  this.registers.c = this.registers.e
+  return this.registers.pc + 1
+
+# Cp[y H to C
+proc handleLD_C_H(this: var CPU): uint16 =
+  this.registers.c = this.registers.h
+  return this.registers.pc + 1
+
+# Copy L to C
+proc handleLD_C_L(this: var CPU): uint16 =
+  this.registers.c = this.registers.l
+  return this.registers.pc + 1
+
+# Copy value pointed by HL to C
+proc handleLD_C_HLP(this: var CPU): uint16 =
+  this.registers.c = this.bus.retrieve(this.registers.get_hl())
+  return this.registers.pc + 1
+
 proc handleLD_C_A(this: var CPU): uint16 =
   this.registers.c = this.registers.a
   return this.registers.pc + 1
@@ -182,15 +302,141 @@ proc handleLD_D_B(this: var CPU): uint16 =
   this.registers.d = this.registers.b
   return this.registers.pc + 1
 
+# Copy C to D
+proc handleLD_D_C(this: var CPU): uint16 =
+  this.registers.d = this.registers.c
+  return this.registers.pc + 1
+
+# Copy E to D
+proc handleLD_D_E(this: var CPU): uint16 =
+  this.registers.d = this.registers.e
+  return this.registers.pc + 1
+
+# Copy H to D
+proc handleLD_D_H(this: var CPU): uint16 =
+  this.registers.d = this.registers.h
+  return this.registers.pc + 1
+
+# Copy L to D
+proc handleLD_D_L(this: var CPU): uint16 =
+  this.registers.d = this.registers.l
+  return this.registers.pc + 1
+
 # Copy value pointed by HL to D
 proc handleLD_D_HLP(this: var CPU): uint16 =
   this.registers.d = this.bus.retrieve(this.registers.get_hl())
+  return this.registers.pc + 1
+
+# Copy A to D
+proc handleLD_D_A(this: var CPU): uint16 =
+  this.registers.d = this.registers.a
+  return this.registers.pc + 1
+
+# Copy B to E
+proc handleLD_E_B(this: var CPU): uint16 =
+  this.registers.e = this.registers.b
+  return this.registers.pc + 1
+
+# Copy C to E
+proc handleLD_E_C(this: var CPU): uint16 =
+  this.registers.e = this.registers.c
+  return this.registers.pc + 1
+
+# Copy D to E
+proc handleLD_E_D(this: var CPU): uint16 =
+  this.registers.e = this.registers.d
+  return this.registers.pc + 1
+
+# Copy H to E
+proc handleLD_E_H(this: var CPU): uint16 =
+  this.registers.e = this.registers.h
+  return this.registers.pc + 1
+
+# Copy L to E
+proc handleLD_E_L(this: var CPU): uint16 =
+  this.registers.e = this.registers.l
   return this.registers.pc + 1
 
 # Copy value pointed by HL to E
 proc handleLD_E_HLP(this: var CPU): uint16 =
   this.registers.e = this.bus.retrieve(this.registers.get_hl())
   return this.registers.pc + 1
+# Copy A to E
+proc handleLD_E_A(this: var CPU): uint16 =
+  this.registers.e = this.registers.a
+  return this.registers.pc + 1
+
+# Copy B to H
+proc handleLD_H_B(this: var CPU): uint16 =
+  this.registers.h = this.registers.b
+  return this.registers.pc + 1
+
+# Copy C to H
+proc handleLD_H_C(this: var CPU): uint16 =
+  this.registers.h = this.registers.c
+  return this.registers.pc + 1
+
+# Copy D to H
+proc handleLD_H_D(this: var CPU): uint16 =
+  this.registers.h = this.registers.d
+  return this.registers.pc + 1
+
+# Copy E to H
+proc handleLD_H_E(this: var CPU): uint16 =
+  this.registers.h = this.registers.e
+  return this.registers.pc + 1
+
+# Copy L to H
+proc handleLD_H_L(this: var CPU): uint16 =
+  this.registers.h = this.registers.l
+  return this.registers.pc + 1
+
+
+# Copy value pointed by HL to H
+proc handleLD_H_HLP(this: var CPU): uint16 =
+  this.registers.h = this.bus.retrieve(this.registers.get_hl())
+  return this.registers.pc + 1
+
+# Copy A to H
+proc handleLD_H_A(this: var CPU): uint16 =
+  this.registers.h = this.registers.a
+  return this.registers.pc + 1
+
+# Copy B to L
+proc handleLD_L_B(this: var CPU): uint16 =
+  this.registers.l = this.registers.b
+  return this.registers.pc + 1
+
+# Copy C to L
+proc handleLD_L_C(this: var CPU): uint16 =
+  this.registers.l = this.registers.c
+  return this.registers.pc + 1
+
+# Copy D to L
+proc handleLD_L_D(this: var CPU): uint16 =
+  this.registers.l = this.registers.d
+  return this.registers.pc + 1
+
+# Copy E to L
+proc handleLD_L_E(this: var CPU): uint16 =
+  this.registers.l = this.registers.e
+  return this.registers.pc + 1
+
+# Copy H to L
+proc handleLD_L_H(this: var CPU): uint16 =
+  this.registers.l = this.registers.h
+  return this.registers.pc + 1
+
+# Copy value pointed by HL to L
+proc handleLD_L_HLP(this: var CPU): uint16 =
+  this.registers.l = this.bus.retrieve(this.registers.get_hl())
+  return this.registers.pc + 1
+
+# Copy A to L
+proc handleLD_L_A(this: var CPU): uint16 =
+  this.registers.l = this.registers.a
+  return this.registers.pc + 1
+
 
 proc handleLD_HLP_A(this: var CPU): uint16 =
   this.bus.assign(this.registers.get_hl(), this.registers.a)
@@ -198,6 +444,101 @@ proc handleLD_HLP_A(this: var CPU): uint16 =
 
 proc handleLD_A_E(this: var CPU): uint16 =
   this.registers.a = this.registers.e
+  return this.registers.pc + 1
+
+# Copy value pointed by HL to A
+proc handleLD_A_HLP(this: var CPU): uint16 =
+  this.registers.a = this.bus.retrieve(this.registers.get_hl())
+  return this.registers.pc + 1
+
+# Add B to A
+proc handleADD_A_B(this: var CPU): uint16 =
+  this.genericAdd(this.registers.b)
+  return this.registers.pc + 1
+
+# Add C to A
+proc handleADD_A_C(this: var CPU): uint16 =
+  this.genericAdd(this.registers.c)
+  return this.registers.pc + 1
+
+# Add D to A
+proc handleADD_A_D(this: var CPU): uint16 =
+  this.genericAdd(this.registers.d)
+  return this.registers.pc + 1
+
+# Add E to A
+proc handleADD_A_E(this: var CPU): uint16 =
+  this.genericAdd(this.registers.e)
+  return this.registers.pc + 1
+
+# Add H to A
+proc handleADD_A_H(this: var CPU): uint16 =
+  this.genericAdd(this.registers.h)
+  return this.registers.pc + 1
+
+# Add L to A
+proc handleADD_A_L(this: var CPU): uint16 =
+  this.genericAdd(this.registers.l)
+  return this.registers.pc + 1
+
+# Subtract B from A
+proc handleSUB_B(this: var CPU): uint16 =
+  this.genericSubtract(this.registers.b)
+  return this.registers.pc + 1
+
+# Subtract C from A
+proc handleSUB_C(this: var CPU): uint16 =
+  this.genericSubtract(this.registers.c)
+  return this.registers.pc + 1
+
+# Subtract D from A
+proc handleSUB_D(this: var CPU): uint16 =
+  this.genericSubtract(this.registers.d)
+  return this.registers.pc + 1
+
+# Subtract E from A
+proc handleSUB_E(this: var CPU): uint16 =
+  this.genericSubtract(this.registers.e)
+  return this.registers.pc + 1
+
+# Subtract H from A
+proc handleSUB_H(this: var CPU): uint16 =
+  this.genericSubtract(this.registers.h)
+  return this.registers.pc + 1
+
+# Subtract L from A
+proc handleSUB_L(this: var CPU): uint16 =
+  this.genericSubtract(this.registers.l)
+  return this.registers.pc + 1
+
+# Logical AND B against A
+proc handleAND_B(this: var CPU): uint16 =
+  this.genericAnd(this.registers.b)
+  return this.registers.pc + 1
+
+# Logical AND C against A
+proc handleAND_C(this: var CPU): uint16 =
+  this.genericAnd(this.registers.c)
+  return this.registers.pc + 1
+
+# Logical AND D against A
+proc handleAND_D(this: var CPU): uint16 =
+  this.genericAnd(this.registers.d)
+  return this.registers.pc + 1
+
+# Logical AND E against A
+proc handleAND_E(this: var CPU): uint16 =
+  this.genericAnd(this.registers.e)
+  return this.registers.pc + 1
+
+# Logical AND H against A
+proc handleAND_H(this: var CPU): uint16 =
+  this.genericAnd(this.registers.h)
+  return this.registers.pc + 1
+
+# Logical AND L against A
+proc handleAND_L(this: var CPU): uint16 =
+  this.genericAnd(this.registers.l)
   return this.registers.pc + 1
 
 proc handleXOR_A(this: var CPU): uint16 =
@@ -263,6 +604,10 @@ proc handleLD_FF_C_A(this: var CPU): uint16 =
   this.bus.assign(0xFF00'u16 + this.registers.c, this.registers.a)
   return this.registers.pc + 1
 
+# Jump to 16-bit value pointed by HL
+proc handleJP_HL(this: var CPU): uint16 =
+  return this.registers.get_hl()
+
 # Load A from address pointed to by (FF00h + 8-bit immediate)
 proc handleLD_FF_AP_N(this: var CPU): uint16 =
   this.registers.a = this.bus.retrieve(0xFF00'u16 + this.getOperand())
@@ -285,14 +630,14 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     of Instruction.NOP: this.registers.pc = this.handleNOP() # No Operation "NOP"
     of Instruction.LD_BC_NN: this.registers.pc = this.handleLD_BC_NN() # Load 16-bit immediate into BC "LD BC,nn"
     of Instruction.LD_BCP_A: this.registers.pc = this.handleLD_BCP_A() # Save A to address pointed by BC "LD (BC),A"
-    # of Instruction.INC_BC: this.registers.pc = this.handleINC_BC() # Increment 16-bit BC "INC BC"
+    of Instruction.INC_BC: this.registers.pc = this.handleINC_BC() # Increment 16-bit BC "INC BC"
     # of Instruction.INC_B: this.registers.pc = this.handleINC_B() # Increment B "INC B"
     of Instruction.DEC_B: this.registers.pc = this.handleDEC_B() # Decrement B "DEC B"
     of Instruction.LD_B_N: this.registers.pc = this.handleLD_B_N() # Load 8-bit immediate into B "LD B,n"
     # of Instruction.RLCA: this.registers.pc = this.handleRLCA() # Rotate A left with carry "RLC A"
-    # of Instruction.LD_NNP_SP: this.registers.pc = this.handleLD_NNP_SP() # Save SP to given address "LD (nn),SP"
+    of Instruction.LD_NNP_SP: this.registers.pc = this.handleLD_NNP_SP() # Save SP to given address "LD (nn),SP"
     # of Instruction.ADD_HL_BC: this.registers.pc = this.handleADD_HL_BC() # Add 16-bit BC to HL "ADD HL,BC"
-    # of Instruction.LD_A_BCP: this.registers.pc = this.handleLD_A_BCP() # Load A from address pointed to by BC "LD A,(BC)"
+    of Instruction.LD_A_BCP: this.registers.pc = this.handleLD_A_BCP() # Load A from address pointed to by BC "LD A,(BC)"
     # of Instruction.DEC_BC: this.registers.pc = this.handleDEC_BC() # Decrement 16-bit BC "DEC BC"
     of Instruction.INC_C: this.registers.pc = this.handleINC_C() # Increment C "INC C"
     # of Instruction.DEC_C: this.registers.pc = this.handleDEC_C() # Decrement C "DEC C"
@@ -330,7 +675,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.DEC_L: this.registers.pc = this.handleDEC_L() # Decrement L "DEC L"
     # of Instruction.LD_L_N: this.registers.pc = this.handleLD_L_N() # Load 8-bit immediate into L "LD L,n"
     # of Instruction.LOG_NOT: this.registers.pc = this.handleLOG_NOT() # Complement (logical NOT) on A "CPL"
-    # of Instruction.JR_NC_N: this.registers.pc = this.handleJR_NC_N() # Relative jump by signed immediate if last result caused no carry "JR NC,n"
+    of Instruction.JR_NC_N: this.registers.pc = this.handleJR_NC_N() # Relative jump by signed immediate if last result caused no carry "JR NC,n"
     of Instruction.LD_SP_NN: this.registers.pc = this.handleLD_SP_NN() # Load 16-bit immediate into SP "LD SP,nn"
     of Instruction.LDD_HLP_A: this.registers.pc = this.handleLDD_HLP_A() # Save A to address pointed by HL, and decrement HL "LDD (HL),A"
     # of Instruction.INC_SP: this.registers.pc = this.handleINC_SP() # Increment 16-bit HL "INC SP"
@@ -346,54 +691,54 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.DEC_A: this.registers.pc = this.handleDEC_A() # Decrement A "DEC A"
     of Instruction.LD_A_N: this.registers.pc = this.handleLD_A_N() # Load 8-bit immediate into A "LD A,n"
     # of Instruction.CCF: this.registers.pc = this.handleCCF() # Clear carry flag "CCF"
-    # of Instruction.LD_B_B: this.registers.pc = this.handleLD_B_B() # Copy B to B "LD B,B"
-    # of Instruction.LD_B_C: this.registers.pc = this.handleLD_B_C() # Copy C to B "LD B,C"
-    # of Instruction.LD_B_D: this.registers.pc = this.handleLD_B_D() # Copy D to B "LD B,D"
-    # of Instruction.LD_B_E: this.registers.pc = this.handleLD_B_E() # Copy E to B "LD B,E"
-    # of Instruction.LD_B_H: this.registers.pc = this.handleLD_B_H() # Copy H to B "LD B,H"
-    # of Instruction.LD_B_L: this.registers.pc = this.handleLD_B_L() # Copy L to B "LD B,L"
-    # of Instruction.LD_B_HLP: this.registers.pc = this.handleLD_B_HLP() # Copy value pointed by HL to B "LD B,(HL"
-    # of Instruction.LD_B_A: this.registers.pc = this.handleLD_B_A() # Copy A to B "LD B,A"
-    # of Instruction.LD_C_B: this.registers.pc = this.handleLD_C_B() # Copy B to C "LD C,B"
-    # of Instruction.LD_C_C: this.registers.pc = this.handleLD_C_C() # Copy C to C "LD C,C"
-    # of Instruction.LD_C_D: this.registers.pc = this.handleLD_C_D() # Copy D to C "LD C,D"
-    # of Instruction.LD_C_E: this.registers.pc = this.handleLD_C_E() # Copy E to C "LD C,E"
-    # of Instruction.LD_C_H: this.registers.pc = this.handleLD_C_H() # Copy H to C "LD C,H"
-    # of Instruction.LD_C_L: this.registers.pc = this.handleLD_C_L() # Copy L to C "LD C,L"
-    # of Instruction.LD_C_HLP: this.registers.pc = this.handleLD_C_HLP() # Copy value pointed by HL to C "LD C,(HL"
+    of Instruction.LD_B_B: this.registers.pc = this.handleNOP() # Copy B to B "LD B,B"
+    of Instruction.LD_B_C: this.registers.pc = this.handleLD_B_C() # Copy C to B "LD B,C"
+    of Instruction.LD_B_D: this.registers.pc = this.handleLD_B_D() # Copy D to B "LD B,D"
+    of Instruction.LD_B_E: this.registers.pc = this.handleLD_B_E() # Copy E to B "LD B,E"
+    of Instruction.LD_B_H: this.registers.pc = this.handleLD_B_H() # Copy H to B "LD B,H"
+    of Instruction.LD_B_L: this.registers.pc = this.handleLD_B_L() # Copy L to B "LD B,L"
+    of Instruction.LD_B_HLP: this.registers.pc = this.handleLD_B_HLP() # Copy value pointed by HL to B "LD B,(HL"
+    of Instruction.LD_B_A: this.registers.pc = this.handleLD_B_A() # Copy A to B "LD B,A"
+    of Instruction.LD_C_B: this.registers.pc = this.handleLD_C_B() # Copy B to C "LD C,B"
+    of Instruction.LD_C_C: this.registers.pc = this.handleNOP() # Copy C to C "LD C,C"
+    of Instruction.LD_C_D: this.registers.pc = this.handleLD_C_D() # Copy D to C "LD C,D"
+    of Instruction.LD_C_E: this.registers.pc = this.handleLD_C_E() # Copy E to C "LD C,E"
+    of Instruction.LD_C_H: this.registers.pc = this.handleLD_C_H() # Copy H to C "LD C,H"
+    of Instruction.LD_C_L: this.registers.pc = this.handleLD_C_L() # Copy L to C "LD C,L"
+    of Instruction.LD_C_HLP: this.registers.pc = this.handleLD_C_HLP() # Copy value pointed by HL to C "LD C,(HL"
     of Instruction.LD_C_A: this.registers.pc = this.handleLD_C_A() # Copy A to C "LD C,A"
     of Instruction.LD_D_B: this.registers.pc = this.handleLD_D_B() # Copy B to D "LD D,B"
-    # of Instruction.LD_D_C: this.registers.pc = this.handleLD_D_C() # Copy C to D "LD D,C"
-    # of Instruction.LD_D_D: this.registers.pc = this.handleLD_D_D() # Copy D to D "LD D,D"
-    # of Instruction.LD_D_E: this.registers.pc = this.handleLD_D_E() # Copy E to D "LD D,E"
-    # of Instruction.LD_D_H: this.registers.pc = this.handleLD_D_H() # Copy H to D "LD D,H"
-    # of Instruction.LD_D_L: this.registers.pc = this.handleLD_D_L() # Copy L to D "LD D,L"
+    of Instruction.LD_D_C: this.registers.pc = this.handleLD_D_C() # Copy C to D "LD D,C"
+    of Instruction.LD_D_D: this.registers.pc = this.handleNOP() # Copy D to D "LD D,D"
+    of Instruction.LD_D_E: this.registers.pc = this.handleLD_D_E() # Copy E to D "LD D,E"
+    of Instruction.LD_D_H: this.registers.pc = this.handleLD_D_H() # Copy H to D "LD D,H"
+    of Instruction.LD_D_L: this.registers.pc = this.handleLD_D_L() # Copy L to D "LD D,L"
     of Instruction.LD_D_HLP: this.registers.pc = this.handleLD_D_HLP() # Copy value pointed by HL to D "LD D,(HL"
-    # of Instruction.LD_D_A: this.registers.pc = this.handleLD_D_A() # Copy A to D "LD D,A"
-    # of Instruction.LD_E_B: this.registers.pc = this.handleLD_E_B() # Copy B to E "LD E,B"
-    # of Instruction.LD_E_C: this.registers.pc = this.handleLD_E_C() # Copy C to E "LD E,C"
-    # of Instruction.LD_E_D: this.registers.pc = this.handleLD_E_D() # Copy D to E "LD E,D"
-    # of Instruction.LD_E_E: this.registers.pc = this.handleLD_E_E() # Copy E to E "LD E,E"
-    # of Instruction.LD_E_H: this.registers.pc = this.handleLD_E_H() # Copy H to E "LD E,H"
-    # of Instruction.LD_E_L: this.registers.pc = this.handleLD_E_L() # Copy L to E "LD E,L"
+    of Instruction.LD_D_A: this.registers.pc = this.handleLD_D_A() # Copy A to D "LD D,A"
+    of Instruction.LD_E_B: this.registers.pc = this.handleLD_E_B() # Copy B to E "LD E,B"
+    of Instruction.LD_E_C: this.registers.pc = this.handleLD_E_C() # Copy C to E "LD E,C"
+    of Instruction.LD_E_D: this.registers.pc = this.handleLD_E_D() # Copy D to E "LD E,D"
+    of Instruction.LD_E_E: this.registers.pc = this.handleNOP() # Copy E to E "LD E,E"
+    of Instruction.LD_E_H: this.registers.pc = this.handleLD_E_H() # Copy H to E "LD E,H"
+    of Instruction.LD_E_L: this.registers.pc = this.handleLD_E_L() # Copy L to E "LD E,L"
     of Instruction.LD_E_HLP: this.registers.pc = this.handleLD_E_HLP() # Copy value pointed by HL to E "LD E,(HL"
-    # of Instruction.LD_E_A: this.registers.pc = this.handleLD_E_A() # Copy A to E "LD E,A"
-    # of Instruction.LD_H_B: this.registers.pc = this.handleLD_H_B() # Copy B to H "LD H,B"
-    # of Instruction.LD_H_C: this.registers.pc = this.handleLD_H_C() # Copy C to H "LD H,C"
-    # of Instruction.LD_H_D: this.registers.pc = this.handleLD_H_D() # Copy D to H "LD H,D"
-    # of Instruction.LD_H_E: this.registers.pc = this.handleLD_H_E() # Copy E to H "LD H,E"
-    # of Instruction.LD_H_H: this.registers.pc = this.handleLD_H_H() # Copy H to H "LD H,H"
-    # of Instruction.LD_H_L: this.registers.pc = this.handleLD_H_L() # Copy L to H "LD H,L"
-    # of Instruction.LD_H_HLP: this.registers.pc = this.handleLD_H_HLP() # Copy value pointed by HL to H "LD H,(HL"
-    # of Instruction.LD_H_A: this.registers.pc = this.handleLD_H_A() # Copy A to H "LD H,A"
-    # of Instruction.LD_L_B: this.registers.pc = this.handleLD_L_B() # Copy B to L "LD L,B"
-    # of Instruction.LD_L_C: this.registers.pc = this.handleLD_L_C() # Copy C to L "LD L,C"
-    # of Instruction.LD_L_D: this.registers.pc = this.handleLD_L_D() # Copy D to L "LD L,D"
-    # of Instruction.LD_L_E: this.registers.pc = this.handleLD_L_E() # Copy E to L "LD L,E"
-    # of Instruction.LD_L_H: this.registers.pc = this.handleLD_L_H() # Copy H to L "LD L,H"
-    # of Instruction.LD_L_L: this.registers.pc = this.handleLD_L_L() # Copy L to L "LD L,L"
-    # of Instruction.LD_L_HLP: this.registers.pc = this.handleLD_L_HLP() # Copy value pointed by HL to L "LD L,(HL"
-    # of Instruction.LD_L_A: this.registers.pc = this.handleLD_L_A() # Copy A to L "LD L,A"
+    of Instruction.LD_E_A: this.registers.pc = this.handleLD_E_A() # Copy A to E "LD E,A"
+    of Instruction.LD_H_B: this.registers.pc = this.handleLD_H_B() # Copy B to H "LD H,B"
+    of Instruction.LD_H_C: this.registers.pc = this.handleLD_H_C() # Copy C to H "LD H,C"
+    of Instruction.LD_H_D: this.registers.pc = this.handleLD_H_D() # Copy D to H "LD H,D"
+    of Instruction.LD_H_E: this.registers.pc = this.handleLD_H_E() # Copy E to H "LD H,E"
+    of Instruction.LD_H_H: this.registers.pc = this.handleNOP() # Copy H to H "LD H,H"
+    of Instruction.LD_H_L: this.registers.pc = this.handleLD_H_L() # Copy L to H "LD H,L"
+    of Instruction.LD_H_HLP: this.registers.pc = this.handleLD_H_HLP() # Copy value pointed by HL to H "LD H,(HL"
+    of Instruction.LD_H_A: this.registers.pc = this.handleLD_H_A() # Copy A to H "LD H,A"
+    of Instruction.LD_L_B: this.registers.pc = this.handleLD_L_B() # Copy B to L "LD L,B"
+    of Instruction.LD_L_C: this.registers.pc = this.handleLD_L_C() # Copy C to L "LD L,C"
+    of Instruction.LD_L_D: this.registers.pc = this.handleLD_L_D() # Copy D to L "LD L,D"
+    of Instruction.LD_L_E: this.registers.pc = this.handleLD_L_E() # Copy E to L "LD L,E"
+    of Instruction.LD_L_H: this.registers.pc = this.handleLD_L_H() # Copy H to L "LD L,H"
+    of Instruction.LD_L_L: this.registers.pc = this.handleNOP() # Copy L to L "LD L,L"
+    of Instruction.LD_L_HLP: this.registers.pc = this.handleLD_L_HLP() # Copy value pointed by HL to L "LD L,(HL"
+    of Instruction.LD_L_A: this.registers.pc = this.handleLD_L_A() # Copy A to L "LD L,A"
     # of Instruction.LD_HLP_B: this.registers.pc = this.handleLD_HLP_B() # Copy B to address pointed by HL "LD (HL),B"
     # of Instruction.LD_HLP_C: this.registers.pc = this.handleLD_HLP_C() # Copy C to address pointed by HL "LD (HL),C"
     # of Instruction.LD_HLP_D: this.registers.pc = this.handleLD_HLP_D() # Copy D to address pointed by HL "LD (HL),D"
@@ -408,14 +753,14 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     of Instruction.LD_A_E: this.registers.pc = this.handleLD_A_E() # Copy E to A "LD A,E"
     # of Instruction.LD_A_H: this.registers.pc = this.handleLD_A_H() # Copy H to A "LD A,H"
     # of Instruction.LD_A_L: this.registers.pc = this.handleLD_A_L() # Copy L to A "LD A,L"
-    # of Instruction.LD_A_HLP: this.registers.pc = this.handleLD_A_HLP() # Copy value pointed by HL to A "LD A,(HL"
+    of Instruction.LD_A_HLP: this.registers.pc = this.handleLD_A_HLP() # Copy value pointed by HL to A "LD A,(HL"
     # of Instruction.LD_A_A: this.registers.pc = this.handleLD_A_A() # Copy A to A "LD A,A"
-    # of Instruction.ADD_A_B: this.registers.pc = this.handleADD_A_B() # Add B to A "ADD A,B"
-    # of Instruction.ADD_A_C: this.registers.pc = this.handleADD_A_C() # Add C to A "ADD A,C"
-    # of Instruction.ADD_A_D: this.registers.pc = this.handleADD_A_D() # Add D to A "ADD A,D"
-    # of Instruction.ADD_A_E: this.registers.pc = this.handleADD_A_E() # Add E to A "ADD A,E"
-    # of Instruction.ADD_A_H: this.registers.pc = this.handleADD_A_H() # Add H to A "ADD A,H"
-    # of Instruction.ADD_A_L: this.registers.pc = this.handleADD_A_L() # Add L to A "ADD A,L"
+    of Instruction.ADD_A_B: this.registers.pc = this.handleADD_A_B() # Add B to A "ADD A,B"
+    of Instruction.ADD_A_C: this.registers.pc = this.handleADD_A_C() # Add C to A "ADD A,C"
+    of Instruction.ADD_A_D: this.registers.pc = this.handleADD_A_D() # Add D to A "ADD A,D"
+    of Instruction.ADD_A_E: this.registers.pc = this.handleADD_A_E() # Add E to A "ADD A,E"
+    of Instruction.ADD_A_H: this.registers.pc = this.handleADD_A_H() # Add H to A "ADD A,H"
+    of Instruction.ADD_A_L: this.registers.pc = this.handleADD_A_L() # Add L to A "ADD A,L"
     # of Instruction.ADD_A_HLP: this.registers.pc = this.handleADD_A_HLP() # Add value pointed by HL to A "ADD A,(HL"
     # of Instruction.ADD_A_A: this.registers.pc = this.handleADD_A_A() # Add A to A "ADD A,A"
     # of Instruction.ADC_B: this.registers.pc = this.handleADC_B() # Add B and carry flag to A "ADC A,B"
@@ -426,12 +771,12 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.ADC_L: this.registers.pc = this.handleADC_L() # Add and carry flag L to A "ADC A,L"
     # of Instruction.ADC_HLP: this.registers.pc = this.handleADC_HLP() # Add value pointed by HL and carry flag to A "ADC A,(HL"
     # of Instruction.ADC_A: this.registers.pc = this.handleADC_A() # Add A and carry flag to A "ADC A,A"
-    # of Instruction.SUB_B: this.registers.pc = this.handleSUB_B() # Subtract B from A "SUB A,B"
-    # of Instruction.SUB_C: this.registers.pc = this.handleSUB_C() # Subtract C from A "SUB A,C"
-    # of Instruction.SUB_D: this.registers.pc = this.handleSUB_D() # Subtract D from A "SUB A,D"
-    # of Instruction.SUB_E: this.registers.pc = this.handleSUB_E() # Subtract E from A "SUB A,E"
-    # of Instruction.SUB_H: this.registers.pc = this.handleSUB_H() # Subtract H from A "SUB A,H"
-    # of Instruction.SUB_L: this.registers.pc = this.handleSUB_L() # Subtract L from A "SUB A,L"
+    of Instruction.SUB_B: this.registers.pc = this.handleSUB_B() # Subtract B from A "SUB A,B"
+    of Instruction.SUB_C: this.registers.pc = this.handleSUB_C() # Subtract C from A "SUB A,C"
+    of Instruction.SUB_D: this.registers.pc = this.handleSUB_D() # Subtract D from A "SUB A,D"
+    of Instruction.SUB_E: this.registers.pc = this.handleSUB_E() # Subtract E from A "SUB A,E"
+    of Instruction.SUB_H: this.registers.pc = this.handleSUB_H() # Subtract H from A "SUB A,H"
+    of Instruction.SUB_L: this.registers.pc = this.handleSUB_L() # Subtract L from A "SUB A,L"
     # of Instruction.SUB_HLP: this.registers.pc = this.handleSUB_HLP() # Subtract value pointed by HL from A "SUB A,(HL"
     # of Instruction.SUB_A: this.registers.pc = this.handleSUB_A() # Subtract A from A "SUB A,A"
     # of Instruction.SBC_B: this.registers.pc = this.handleSBC_B() # Subtract B and carry flag from A "SBC A,B"
@@ -442,12 +787,12 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.SBC_L: this.registers.pc = this.handleSBC_L() # Subtract and carry flag L from A "SBC A,L"
     # of Instruction.SBC_HLP: this.registers.pc = this.handleSBC_HLP() # Subtract value pointed by HL and carry flag from A "SBC A,(HL"
     # of Instruction.SBC_A: this.registers.pc = this.handleSBC_A() # Subtract A and carry flag from A "SBC A,A"
-    # of Instruction.AND_B: this.registers.pc = this.handleAND_B() # Logical AND B against A "AND B"
-    # of Instruction.AND_C: this.registers.pc = this.handleAND_C() # Logical AND C against A "AND C"
-    # of Instruction.AND_D: this.registers.pc = this.handleAND_D() # Logical AND D against A "AND D"
-    # of Instruction.AND_E: this.registers.pc = this.handleAND_E() # Logical AND E against A "AND E"
-    # of Instruction.AND_H: this.registers.pc = this.handleAND_H() # Logical AND H against A "AND H"
-    # of Instruction.AND_L: this.registers.pc = this.handleAND_L() # Logical AND L against A "AND L"
+    of Instruction.AND_B: this.registers.pc = this.handleAND_B() # Logical AND B against A "AND B"
+    of Instruction.AND_C: this.registers.pc = this.handleAND_C() # Logical AND C against A "AND C"
+    of Instruction.AND_D: this.registers.pc = this.handleAND_D() # Logical AND D against A "AND D"
+    of Instruction.AND_E: this.registers.pc = this.handleAND_E() # Logical AND E against A "AND E"
+    of Instruction.AND_H: this.registers.pc = this.handleAND_H() # Logical AND H against A "AND H"
+    of Instruction.AND_L: this.registers.pc = this.handleAND_L() # Logical AND L against A "AND L"
     # of Instruction.AND_HLP: this.registers.pc = this.handleAND_HLP() # Logical AND value pointed by HL against A "AND (HL"
     # of Instruction.AND_A: this.registers.pc = this.handleAND_A() # Logical AND A against A "AND A"
     # of Instruction.XOR_B: this.registers.pc = this.handleXOR_B() # Logical XOR B against A "XOR B"
@@ -510,7 +855,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.AND_N: this.registers.pc = this.handleAND_N() # Logical AND 8-bit immediate against A "AND n"
     # of Instruction.RST_20: this.registers.pc = this.handleRST_20() # Call routine at address 0020h "RST 20"
     # of Instruction.ADD_SP_N: this.registers.pc = this.handleADD_SP_N() # Add signed 8-bit immediate to SP "ADD SP,d"
-    # of Instruction.JP_HL: this.registers.pc = this.handleJP_HL() # Jump to 16-bit value pointed by HL "JP (HL"
+    of Instruction.JP_HL: this.registers.pc = this.handleJP_HL() # Jump to 16-bit value pointed by HL "JP (HL"
     # of Instruction.LD_NNP_A: this.registers.pc = this.handleLD_NNP_A() # Save A at given 16-bit address "LD (nn),A"
     # of Instruction.XOR_N: this.registers.pc = this.handleXOR_N() # Logical XOR 8-bit immediate against A "XOR n"
     # of Instruction.RST_28: this.registers.pc = this.handleRST_28() # Call routine at address 0028h "RST 28"
@@ -534,7 +879,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
   return this.registers.pc
 
 
-proc reset*(this: var CPU): void = 
+proc reset*(this: var CPU): void =
   this.bus.reset()
 
   this.registers.a = 0;
