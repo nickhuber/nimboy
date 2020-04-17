@@ -1,7 +1,8 @@
+import strutils
+
 import algorithm
 import bitops
 import random
-
 
 # https://gbdev.gg8.se/wiki/articles/Gameboy_Bootstrap_ROM
 const bootROM: array[0x100, uint8] = [
@@ -26,7 +27,6 @@ const bootROM: array[0x100, uint8] = [
 
 type
   MemoryBus* = object
-    bootrom_mapped: bool
     boot: array[0x100, uint8]
     cartridge: array[0x8000, uint8]
     sram: array[0x2000, uint8]
@@ -110,7 +110,9 @@ proc retrieve*(this: MemoryBus, address: uint16): uint8 =
 
   elif address >= 0xFF00 and address <= 0xFF7F:
     return this.io[address - 0xFF00]
-
+  else:
+    echo "UHANDLED MEMORY READ EVENT FOR 0x", toHex(address)
+    quit()
   return 0
 
 
@@ -157,7 +159,9 @@ proc assign*(this: var MemoryBus, address: uint16, value: uint8): void =
   #   for(i = 0; i < 4; i++) spritePalette[1][i] = palette[(value >> (i * 2)) & 3];
   elif address >= 0xFF00 and address <= 0xFF7F:
     this.io[address - 0xFF00] = value;
-
+  else:
+    echo "UHANDLED MEMORY WRITE EVENT FOR 0x", toHex(value), " => 0x", toHex(address)
+    quit()
   # elif address == 0xFF0F:
   #   interrupt.flags = value;
   # elif address == 0xFFFF:
