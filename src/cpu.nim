@@ -12,6 +12,7 @@ type
   CPU = object
     registers: Registers
     bus*: MemoryBus
+    stopped*: bool
 
 proc getOperand(this: var CPU): uint8 =
   return this.bus.retrieve(this.registers.pc + 1)
@@ -139,7 +140,16 @@ proc handleLD_B_N(this: var CPU): uint16 =
   this.registers.b = this.getOperand()
   return this.registers.pc + 2
 
-# # Save SP to given address
+# Rotate A left with carry
+proc handleRLCA(this: var CPU): uint16 =
+  this.registers.f.carry = bitand(this.registers.a, 0x80) shr 7
+  this.registers.a = (this.registers.a shl 1)
+  this.registers.f.half_carry = 0
+  this.registers.f.zero = 1
+  this.registers.f.subtract = 0
+  return this.registers.pc + 1
+
+# Save SP to given address
 proc handleLD_NNP_SP(this: var CPU): uint16 =
   this.bus.assign16(this.getOperand16(), this.registers.sp)
   return this.registers.pc + 3
@@ -157,6 +167,12 @@ proc handleLD_C_N(this: var CPU): uint16 =
   this.registers.c = this.getOperand()
   return this.registers.pc + 1
 
+# Stop processor "STOP"
+# Shoudl continue once a button is pressed
+proc handleSTOP(this: var CPU): uint16 =
+  this.stopped = true
+  return this.registers.pc + 1
+
 proc handleLD_DE_NN(this: var CPU): uint16 =
   this.registers.set_de(this.getOperand16())
   return this.registers.pc + 3
@@ -166,8 +182,13 @@ proc handleLD_D_N(this: var CPU): uint16 =
   this.registers.d = this.getOperand()
   return this.registers.pc + 2
 
+# Rotate A left
 proc handleRLA(this: var CPU): uint16 =
-  this.registers.a = this.genericRotate(this.registers.a)
+  this.registers.f.carry = bitand(this.registers.a, 0x80) shr 7
+  this.registers.f.zero = 0
+  this.registers.f.half_carry = 0
+  this.registers.f.subtract = 0
+  this.registers.a = (this.registers.a shl 1) + this.registers.f.carry
   return this.registers.pc + 1
 
 # Add 16-bit DE to HL
@@ -613,6 +634,13 @@ proc handleLD_FF_AP_N(this: var CPU): uint16 =
   this.registers.a = this.bus.retrieve(0xFF00'u16 + this.getOperand())
   return this.registers.pc + 2
 
+# Add signed 8-bit immediate to SP and save result in HL
+proc handleLD_HL_SP_N(this: var CPU): uint16 =
+  this.registers.f.zero = 0
+  this.registers.f.subtract = 0
+  this.registers.set_hl(this.genericAdd16(this.registers.sp, this.getOperand()))
+  return this.registers.pc + 2
+
 
 proc handleCP_N(this: var CPU): uint16 =
   let operand = this.getOperand()
@@ -634,7 +662,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.INC_B: this.registers.pc = this.handleINC_B() # Increment B "INC B"
     of Instruction.DEC_B: this.registers.pc = this.handleDEC_B() # Decrement B "DEC B"
     of Instruction.LD_B_N: this.registers.pc = this.handleLD_B_N() # Load 8-bit immediate into B "LD B,n"
-    # of Instruction.RLCA: this.registers.pc = this.handleRLCA() # Rotate A left with carry "RLC A"
+    of Instruction.RLCA: this.registers.pc = this.handleRLCA() # Rotate A left with carry "RLC A"
     of Instruction.LD_NNP_SP: this.registers.pc = this.handleLD_NNP_SP() # Save SP to given address "LD (nn),SP"
     # of Instruction.ADD_HL_BC: this.registers.pc = this.handleADD_HL_BC() # Add 16-bit BC to HL "ADD HL,BC"
     of Instruction.LD_A_BCP: this.registers.pc = this.handleLD_A_BCP() # Load A from address pointed to by BC "LD A,(BC)"
@@ -643,7 +671,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.DEC_C: this.registers.pc = this.handleDEC_C() # Decrement C "DEC C"
     of Instruction.LD_C_N: this.registers.pc = this.handleLD_C_N() # Load 8-bit immediate into C "LD C,n"
     # of Instruction.RRCA: this.registers.pc = this.handleRRCA() # Rotate A right with carry "RRC A"
-    # of Instruction.STOP: this.registers.pc = this.handleSTOP() # Stop processor "STOP"
+    of Instruction.STOP: this.registers.pc = this.handleSTOP() # Stop processor "STOP"
     of Instruction.LD_DE_NN: this.registers.pc = this.handleLD_DE_NN() # Load 16-bit immediate into DE "LD DE,nn"
     # of Instruction.LD_DEP_A: this.registers.pc = this.handleLD_DEP_A() # Save A to address pointed by DE "LD (DE),A"
     of Instruction.INC_DE: this.registers.pc = this.handleINC_DE() # Increment 16-bit DE "INC DE"
@@ -866,7 +894,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.PUSH_AF: this.registers.pc = this.handlePUSH_AF() # Push 16-bit AF onto stack "PUSH AF"
     # of Instruction.OR_N: this.registers.pc = this.handleOR_N() # Logical OR 8-bit immediate against A "OR n"
     # of Instruction.RST_30: this.registers.pc = this.handleRST_30() # Call routine at address 0030h "RST 30"
-    # of Instruction.LD_HL_SP_N: this.registers.pc = this.handleLD_HL_SP_N() # Add signed 8-bit immediate to SP and save result in HL "LDHL SP,d"
+    of Instruction.LD_HL_SP_N: this.registers.pc = this.handleLD_HL_SP_N() # Add signed 8-bit immediate to SP and save result in HL "LDHL SP,d"
     # of Instruction.LD_SP_HL: this.registers.pc = this.handleLD_SP_HL() # Copy HL to SP "LD SP,HL"
     # of Instruction.LD_A_NNP: this.registers.pc = this.handleLD_A_NNP() # Load A from given 16-bit address "LD A,(nn)"
     # of Instruction.EI: this.registers.pc = this.handleEI() # Enable interrupts "EI"
@@ -881,7 +909,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
 
 proc reset*(this: var CPU): void =
   this.bus.reset()
-
+  this.stopped = false
   this.registers.a = 0;
   this.registers.f.zero = 0
   this.registers.f.subtract = 0

@@ -26,6 +26,10 @@ const bootROM: array[0x100, uint8] = [
 
 
 type
+  color = uint8
+
+
+type
   MemoryBus* = object
     boot: array[0x100, uint8]
     cartridge: array[0x8000, uint8]
@@ -35,7 +39,8 @@ type
     oam: array[0xFFFF, uint8]
     wram: array[0x2000, uint8]
     hram: array[0x80, uint8]
-
+    # TODO: This is more GPU related than memory bus
+    tiles*: array[384, array[8, array[8, color]]]
 
 proc reset*(this: var MemoryBus): void =
   this.boot = bootROM
@@ -45,6 +50,8 @@ proc reset*(this: var MemoryBus): void =
   this.wram.fill(0)
   this.hram.fill(0)
   this.io.fill(0)
+  # this.tiles.fill(0)
+  # this.framebuffer.fill(0)
 
 
 proc initializeCartridgeData*(this: var MemoryBus, cartridgeData: string): void =
@@ -81,7 +88,6 @@ proc retrieve*(this: MemoryBus, address: uint16): uint8 =
 
   elif address >= 0xFF80 and address <= 0xFFFE:
     return this.hram[address - 0xFF80]
-
   elif address >= 0xFF00 and address <= 0xFF7F:
     return this.io[address - 0xFF00]
   else:
@@ -96,12 +102,27 @@ proc retrieve16*(this: MemoryBus, address: uint16): uint16 =
   return ret
 
 
+proc updateTile(this: var MemoryBus, address: uint16, value: uint8): void =
+  let f = address and 0x1FFE
+  let tile = (address shr 4) and 0x1FF
+  let y = (address shr 1) and 0x7
+
+  for x in 0'u8..7'u8:
+    let bitIndex: uint8 = 1'u8 shl (0x7'u8 - x)
+    this.tiles[tile][y][x] = 0
+    if bitand(this.vram[f], bitIndex) == bitIndex:
+      this.tiles[tile][y][x] = 1
+    if bitand(this.vram[f + 1], bitIndex) == bitIndex:
+      this.tiles[tile][y][x] += 2
+
+
 proc assign*(this: var MemoryBus, address: uint16, value: uint8): void =
   if address >= 0xA000 and address <= 0xBFFF:
     this.sram[address - 0xA000] = value;
   elif address >= 0x8000 and address <= 0x9FFF:
     this.vram[address - 0x8000] = value
-    # TODO update graphics info?
+    if address < 0x97FF:
+      this.updateTile(address, value)
   elif address >= 0xC000 and address <= 0xDFFF:
     this.wram[address - 0xC000] = value
   elif address >= 0xE000 and address <= 0xFDFF:
@@ -114,7 +135,7 @@ proc assign*(this: var MemoryBus, address: uint16, value: uint8): void =
     this.io[address - 0xFF00] = value;
   else:
     echo "UHANDLED MEMORY WRITE EVENT FOR 0x", toHex(value), " => 0x", toHex(address)
-    quit()
+    # quit()
 
 
 proc assign16*(this: var MemoryBus, address: uint16, value: uint16): void =
