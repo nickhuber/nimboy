@@ -1,9 +1,9 @@
 type
   FlagRegister = object
-    zero* {.bitsize:1.}: uint8
-    subtract* {.bitsize:1.}: uint8
-    half_carry* {.bitsize:1.}: uint8
-    carry* {.bitsize:1.}: uint8
+    zero*: bool
+    subtract*: bool
+    half_carry*: bool
+    carry*: bool
 
 
 type

@@ -102,6 +102,7 @@ proc main() =
               cast[cint](y + ((t div 19) * 8))
             )
       render.present()
+      cpu.stopped = false
     else:
       cpu.step()
 

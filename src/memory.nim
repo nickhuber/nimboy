@@ -1,7 +1,6 @@
 import strutils
 
 import algorithm
-import bitops
 import random
 
 # https://gbdev.gg8.se/wiki/articles/Gameboy_Bootstrap_ROM
@@ -42,6 +41,7 @@ type
     # TODO: This is more GPU related than memory bus
     tiles*: array[384, array[8, array[8, color]]]
 
+
 proc reset*(this: var MemoryBus): void =
   this.boot = bootROM
   this.sram.fill(0)
@@ -50,9 +50,9 @@ proc reset*(this: var MemoryBus): void =
   this.wram.fill(0)
   this.hram.fill(0)
   this.io.fill(0)
-  # this.tiles.fill(0)
-  # this.framebuffer.fill(0)
-
+  for t in 0..383:
+    for x in 0..7:
+      this.tiles[t][x].fill(0)
 
 proc initializeCartridgeData*(this: var MemoryBus, cartridgeData: string): void =
   for i, b in cartridgeData:
@@ -92,7 +92,7 @@ proc retrieve*(this: MemoryBus, address: uint16): uint8 =
     return this.io[address - 0xFF00]
   else:
     echo "UHANDLED MEMORY READ EVENT FOR 0x", toHex(address)
-    quit()
+    # quit()
   return 0
 
 
@@ -110,9 +110,9 @@ proc updateTile(this: var MemoryBus, address: uint16, value: uint8): void =
   for x in 0'u8..7'u8:
     let bitIndex: uint8 = 1'u8 shl (0x7'u8 - x)
     this.tiles[tile][y][x] = 0
-    if bitand(this.vram[f], bitIndex) == bitIndex:
+    if (this.vram[f] and bitIndex) == bitIndex:
       this.tiles[tile][y][x] = 1
-    if bitand(this.vram[f + 1], bitIndex) == bitIndex:
+    if (this.vram[f + 1] and bitIndex) == bitIndex:
       this.tiles[tile][y][x] += 2
 
 
@@ -135,9 +135,9 @@ proc assign*(this: var MemoryBus, address: uint16, value: uint8): void =
     this.io[address - 0xFF00] = value;
   else:
     echo "UHANDLED MEMORY WRITE EVENT FOR 0x", toHex(value), " => 0x", toHex(address)
-    # quit()
+    quit()
 
 
 proc assign16*(this: var MemoryBus, address: uint16, value: uint16): void =
-  this.assign(address, cast[uint8](bitand(value, 0x00FF)))
-  this.assign(address + 1, cast[uint8](bitand(value, 0xFF00) div 256))
+  this.assign(address, cast[uint8](value and 0x00FF))
+  this.assign(address + 1, cast[uint8]((value and 0xFF00) div 256))
