@@ -54,9 +54,15 @@ proc reset*(this: var MemoryBus): void =
     for x in 0..7:
       this.tiles[t][x].fill(0)
 
+
 proc initializeCartridgeData*(this: var MemoryBus, cartridgeData: string): void =
   for i, b in cartridgeData:
     this.cartridge[i] = cast[uint8](b)
+
+
+proc initializeCartridgeData*(this: var MemoryBus, cartridgeData: openArray[uint8]): void =
+  for i, b in cartridgeData:
+    this.cartridge[i] = b
 
 
 proc retrieve*(this: MemoryBus, address: uint16): uint8 =

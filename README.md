@@ -10,3 +10,9 @@ emulators out there.
 On windows, using scoop:
   * scoop add extras
   * scoop install sdl2
+
+To run tests:
+  * nimble test
+
+To compile and run:
+  * nimble run nimboy /path/to/rom.gb

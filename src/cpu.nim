@@ -9,7 +9,7 @@ import registers
 
 type
   CPU = object
-    registers: Registers
+    registers*: Registers
     bus*: MemoryBus
     stopped*: bool
 
@@ -614,14 +614,14 @@ proc handleRET_Z(this: var CPU): uint16 =
   if this.registers.f.zero:
     let ret = this.bus.retrieve16(this.registers.sp)
     this.registers.sp += 2
-    return ret + 3
+    return ret
   else:
     return this.registers.pc + 1
 
 proc handleRET(this: var CPU): uint16 =
   let ret = this.bus.retrieve16(this.registers.sp)
   this.registers.sp += 2
-  return ret + 3
+  return ret
 
 proc handleCB_N(this: var CPU): uint16 =
   this.executeExtendedOperation(ExtendedOperation(this.getOperand()))
@@ -629,7 +629,7 @@ proc handleCB_N(this: var CPU): uint16 =
 
 proc handleCALL_NN(this: var CPU): uint16 =
   this.registers.sp -= 2
-  this.bus.assign16(this.registers.sp, this.registers.pc)
+  this.bus.assign16(this.registers.sp, this.registers.pc + 3)
   return this.getOperand()
 
 # Pop 16-bit value from stack into DE
@@ -644,7 +644,6 @@ proc handlePUSH_DE(this: var CPU): uint16 =
   this.bus.assign16(this.registers.sp, this.registers.get_de())
   return this.registers.pc + 1
 
-
 proc handleLD_FF_N_AP(this: var CPU): uint16 =
   this.bus.assign(0xFF00'u16 + this.getOperand(), this.registers.a)
   return this.registers.pc + 2
@@ -654,7 +653,6 @@ proc handlePOP_HL(this: var CPU): uint16 =
   this.registers.set_hl(this.bus.retrieve16(this.registers.sp))
   this.registers.sp += 2
   return this.registers.pc + 1
-
 
 proc handleLD_FF_C_A(this: var CPU): uint16 =
   this.bus.assign(0xFF00'u16 + this.registers.c, this.registers.a)
@@ -672,7 +670,7 @@ proc handleLD_NNP_A(this: var CPU): uint16 =
 # Call routine at address 0028h
 proc handleRST_28(this: var CPU): uint16 =
   this.registers.sp -= 2
-  this.bus.assign16(this.registers.sp, this.registers.pc)
+  this.bus.assign16(this.registers.sp, this.registers.pc + 1)
   return 0x0028'u16
 
 # Load A from address pointed to by (FF00h + 8-bit immediate)
@@ -699,7 +697,7 @@ proc handleCP_N(this: var CPU): uint16 =
 # Call routine at address 0038h
 proc handleRST_38(this: var CPU): uint16 =
   this.registers.sp -= 2
-  this.bus.assign16(this.registers.sp, this.registers.pc)
+  this.bus.assign16(this.registers.sp, this.registers.pc + 1)
   return 0x0038'u16
 
 proc execute(this: var CPU, instruction: Instruction): uint16 =
