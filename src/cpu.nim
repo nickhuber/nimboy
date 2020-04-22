@@ -20,15 +20,12 @@ proc getOperand16(this: var CPU): uint16 =
   return this.bus.retrieve16(this.registers.pc + 1)
 
 # On 8 bit operations, a half-carry happens on the 3rd bit
-func hasHalfCarry(value1: uint8, value2: uint8): bool {.inline.} =
-  if ((value1 and 0x0F) + (value2 and 0x0F) and 0x1F) == 0x10:
-    return true
-  else:
-    return false
+proc hasHalfCarry(value1: uint8, value2: uint8): bool {.inline.} =
+  return (value1 and 0x10) != (value2 and 0x10)
 
 # On 16 bit operations, a half-carry happens on the 11th bit
 func hasHalfCarry16(value1: uint16, value2: uint16): bool {.inline.} =
-  return ((value1 and 0x0FFF) + (value2 and 0x0FFF) and 0x1FFF) == 0x10000
+  return (value1 and 0x01FF) != (value2 and 0x01FF)
 
 func genericRelativeJump(this: var CPU, jump: uint8): uint16 =
   let offset: int8 = cast[int8](jump)
@@ -89,12 +86,6 @@ proc genericInc(this: var CPU, value: uint8): uint8 =
   this.registers.f.zero = value + 1 == 0
   return value + 1
 
-proc genericDec(this: var CPU, value: uint8): uint8 =
-  this.registers.f.half_carry = not (value and 0x0F) == 0x0F
-  this.registers.f.subtract = true
-  this.registers.f.zero = value - 1 == 0
-  return value - 1
-
 proc executeExtendedOperation(this: var CPU, operation: ExtendedOperation): void =
   # echo "Performing extended operation ", operation
   case operation:
@@ -123,11 +114,22 @@ proc handleLD_BCP_A(this: var CPU): uint16 =
 
 # Increment 16-bit BC
 proc handleINC_BC(this: var CPU): uint16 =
-  this.registers.set_bc(this.genericAdd16(this.registers.get_bc(), 1'u16))
+  this.registers.set_bc(this.registers.get_bc() + 1)
+  return this.registers.pc + 1
+
+# Increment B
+proc handleINC_B(this: var CPU): uint16 =
+  this.registers.f.half_carry = hasHalfCarry(this.registers.b, this.registers.b + 1)
+  this.registers.b += 1
+  this.registers.f.subtract = false
+  this.registers.f.zero = this.registers.b == 0
   return this.registers.pc + 1
 
 proc handleDEC_B(this: var CPU): uint16 =
-  this.registers.b = this.genericDec(this.registers.b)
+  this.registers.f.half_carry = hasHalfCarry(this.registers.b, this.registers.b - 1)
+  this.registers.b -= 1
+  this.registers.f.subtract = true
+  this.registers.f.zero = this.registers.b == 0
   return this.registers.pc + 1
 
 proc handleLD_B_N(this: var CPU): uint16 =
@@ -708,7 +710,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     of Instruction.LD_BC_NN: this.registers.pc = this.handleLD_BC_NN() # Load 16-bit immediate into BC "LD BC,nn"
     of Instruction.LD_BCP_A: this.registers.pc = this.handleLD_BCP_A() # Save A to address pointed by BC "LD (BC),A"
     of Instruction.INC_BC: this.registers.pc = this.handleINC_BC() # Increment 16-bit BC "INC BC"
-    # of Instruction.INC_B: this.registers.pc = this.handleINC_B() # Increment B "INC B"
+    of Instruction.INC_B: this.registers.pc = this.handleINC_B() # Increment B "INC B"
     of Instruction.DEC_B: this.registers.pc = this.handleDEC_B() # Decrement B "DEC B"
     of Instruction.LD_B_N: this.registers.pc = this.handleLD_B_N() # Load 8-bit immediate into B "LD B,n"
     of Instruction.RLCA: this.registers.pc = this.handleRLCA() # Rotate A left with carry "RLC A"

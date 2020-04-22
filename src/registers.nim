@@ -1,9 +1,9 @@
 type
   FlagRegister = object
-    zero*: bool
-    subtract*: bool
-    half_carry*: bool
     carry*: bool
+    half_carry*: bool
+    subtract*: bool
+    zero*: bool
 
 
 type
