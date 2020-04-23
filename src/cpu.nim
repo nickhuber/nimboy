@@ -20,12 +20,16 @@ proc getOperand16(this: var CPU): uint16 =
   return this.bus.retrieve16(this.registers.pc + 1)
 
 # On 8 bit operations, a half-carry happens on the 3rd bit
-proc hasHalfCarry(value1: uint8, value2: uint8): bool {.inline.} =
-  return (value1 and 0x10) != (value2 and 0x10)
+func hasHalfCarryAdd(value1: uint8, value2: uint8): bool {.inline.} =
+  return ((value1 and 0x0F) + (value2 and 0x0F) and 0x10) == 0x10
+
+# On 8 bit operations, a half-carry happens on the 3rd bit
+func hasHalfCarrySubtract(value1: uint8, value2: uint8): bool {.inline.} =
+  return ((value1 and 0x0F) - (value2 and 0x0F) and 0x10) == 0x10
 
 # On 16 bit operations, a half-carry happens on the 11th bit
-func hasHalfCarry16(value1: uint16, value2: uint16): bool {.inline.} =
-  return (value1 and 0x01FF) != (value2 and 0x01FF)
+func hasHalfCarryAdd16(value1: uint16, value2: uint16): bool {.inline.} =
+  return ((value1 and 0x0FFF) + (value2 and 0x0FFF) and 0x1000) == 0x1000
 
 func genericRelativeJump(this: var CPU, jump: uint8): uint16 =
   let offset: int8 = cast[int8](jump)
@@ -38,14 +42,14 @@ proc genericAdd(this: var CPU, value: uint8): void =
   let ret: uint16 = this.registers.a + value
   this.registers.a = cast[uint8](ret)
   this.registers.f.carry = ret >= 0x00FF
-  this.registers.f.half_carry = hasHalfCarry(this.registers.a, value)
+  this.registers.f.half_carry = hasHalfCarryAdd(this.registers.a, value)
   this.registers.f.subtract = false
   this.registers.f.zero = this.registers.a == 0
 
 proc genericAdd16(this: var CPU, value1: uint16, value2: uint16): uint16 =
   let ret: uint32 = value1 + value2
   this.registers.f.carry = ret > 0xFFFF
-  this.registers.f.half_carry = hasHalfCarry16(value1, value2)
+  this.registers.f.half_carry = hasHalfCarryAdd16(value1, value2)
   return cast[uint16](ret)
 
 proc genericAnd(this: var CPU, value: uint8): void =
@@ -119,14 +123,15 @@ proc handleINC_BC(this: var CPU): uint16 =
 
 # Increment B
 proc handleINC_B(this: var CPU): uint16 =
-  this.registers.f.half_carry = hasHalfCarry(this.registers.b, this.registers.b + 1)
+  this.registers.f.half_carry = hasHalfCarryAdd(this.registers.b, 1)
   this.registers.b += 1
   this.registers.f.subtract = false
   this.registers.f.zero = this.registers.b == 0
   return this.registers.pc + 1
 
+# Decrement B
 proc handleDEC_B(this: var CPU): uint16 =
-  this.registers.f.half_carry = hasHalfCarry(this.registers.b, this.registers.b - 1)
+  this.registers.f.half_carry = hasHalfCarrySubtract(this.registers.b, 1)
   this.registers.b -= 1
   this.registers.f.subtract = true
   this.registers.f.zero = this.registers.b == 0

@@ -150,6 +150,14 @@ suite "CPU test suite":
       check(not cpu.registers.f.subtract)
       check(not cpu.registers.f.zero)
 
+    test "flags correct on near-half carry":
+      cpu.registers.b = 0x1E
+      cpu.step()
+      check(not cpu.registers.f.carry)
+      check(not cpu.registers.f.half_carry)
+      check(not cpu.registers.f.subtract)
+      check(not cpu.registers.f.zero)
+
     test "flags correct on no carry":
       cpu.registers.b = 0x00
       cpu.step()
@@ -194,6 +202,14 @@ suite "CPU test suite":
       cpu.step()
       check(not cpu.registers.f.carry)
       check(cpu.registers.f.half_carry)
+      check(cpu.registers.f.subtract)
+      check(not cpu.registers.f.zero)
+
+    test "flags correct on near-half carry":
+      cpu.registers.b = 0xF1
+      cpu.step()
+      check(not cpu.registers.f.carry)
+      check(not cpu.registers.f.half_carry)
       check(cpu.registers.f.subtract)
       check(not cpu.registers.f.zero)
 
