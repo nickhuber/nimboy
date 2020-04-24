@@ -39,7 +39,7 @@ func genericRelativeJump(this: var CPU, jump: uint8): uint16 =
 
 # Add value into register A
 proc genericAdd(this: var CPU, value: uint8): void =
-  let ret: uint16 = this.registers.a + value
+  let ret: uint16 = cast[uint16](this.registers.a) + cast[uint16](value)
   this.registers.a = cast[uint8](ret)
   this.registers.f.carry = ret >= 0x00FF
   this.registers.f.half_carry = hasHalfCarryAdd(this.registers.a, value)
@@ -47,9 +47,10 @@ proc genericAdd(this: var CPU, value: uint8): void =
   this.registers.f.zero = this.registers.a == 0
 
 proc genericAdd16(this: var CPU, value1: uint16, value2: uint16): uint16 =
-  let ret: uint32 = value1 + value2
+  let ret: uint32 = cast[uint32](value1) + cast[uint32](value2)
   this.registers.f.carry = ret > 0xFFFF
   this.registers.f.half_carry = hasHalfCarryAdd16(value1, value2)
+  this.registers.f.subtract = false
   return cast[uint16](ret)
 
 proc genericAnd(this: var CPU, value: uint8): void =
@@ -145,8 +146,10 @@ proc handleLD_B_N(this: var CPU): uint16 =
 proc handleRLCA(this: var CPU): uint16 =
   this.registers.f.carry = (this.registers.a and 0x80) == 0x80
   this.registers.a = (this.registers.a shl 1)
+  if this.registers.f.carry:
+    this.registers.a += 1
   this.registers.f.half_carry = false
-  this.registers.f.zero = true
+  this.registers.f.zero = false
   this.registers.f.subtract = false
   return this.registers.pc + 1
 
@@ -155,13 +158,29 @@ proc handleLD_NNP_SP(this: var CPU): uint16 =
   this.bus.assign16(this.getOperand16(), this.registers.sp)
   return this.registers.pc + 3
 
+# Add 16-bit BC to HL
+proc handleADD_HL_BC(this: var CPU): uint16 =
+  this.registers.set_hl(this.genericAdd16(this.registers.get_hl(), this.registers.get_bc()))
+  return this.registers.pc + 1
+
 # Load A from address pointed to by BC
 proc handleLD_A_BCP(this: var CPU): uint16 =
   this.registers.a = this.bus.retrieve(this.registers.get_bc())
   return this.registers.pc + 1
 
 proc handleINC_C(this: var CPU): uint16 =
-  this.registers.c = this.genericInc(this.registers.c)
+  this.registers.f.half_carry = hasHalfCarryAdd(this.registers.c, 1)
+  this.registers.c += 1
+  this.registers.f.subtract = false
+  this.registers.f.zero = this.registers.c == 0
+  return this.registers.pc + 1
+
+# Decrement C
+proc handleDEC_C(this: var CPU): uint16 =
+  this.registers.f.half_carry = hasHalfCarrySubtract(this.registers.c, 1)
+  this.registers.c -= 1
+  this.registers.f.subtract = true
+  this.registers.f.zero = this.registers.c == 0
   return this.registers.pc + 1
 
 proc handleLD_C_N(this: var CPU): uint16 =
@@ -602,6 +621,15 @@ proc handleXOR_A(this: var CPU): uint16 =
   this.genericXor(this.registers.a)
   return this.registers.pc + 1
 
+# Return if last result was not zero
+proc handleRET_NZ(this: var CPU): uint16 =
+  if not this.registers.f.zero:
+    let ret = this.bus.retrieve16(this.registers.sp)
+    this.registers.sp += 2
+    return ret
+  else:
+    return this.registers.pc + 1
+
 proc handlePOP_BC(this: var CPU): uint16 =
   this.registers.set_bc(this.bus.retrieve16(this.registers.sp))
   this.registers.sp += 2
@@ -720,11 +748,11 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     of Instruction.LD_B_N: this.registers.pc = this.handleLD_B_N() # Load 8-bit immediate into B "LD B,n"
     of Instruction.RLCA: this.registers.pc = this.handleRLCA() # Rotate A left with carry "RLC A"
     of Instruction.LD_NNP_SP: this.registers.pc = this.handleLD_NNP_SP() # Save SP to given address "LD (nn),SP"
-    # of Instruction.ADD_HL_BC: this.registers.pc = this.handleADD_HL_BC() # Add 16-bit BC to HL "ADD HL,BC"
+    of Instruction.ADD_HL_BC: this.registers.pc = this.handleADD_HL_BC() # Add 16-bit BC to HL "ADD HL,BC"
     of Instruction.LD_A_BCP: this.registers.pc = this.handleLD_A_BCP() # Load A from address pointed to by BC "LD A,(BC)"
     # of Instruction.DEC_BC: this.registers.pc = this.handleDEC_BC() # Decrement 16-bit BC "DEC BC"
     of Instruction.INC_C: this.registers.pc = this.handleINC_C() # Increment C "INC C"
-    # of Instruction.DEC_C: this.registers.pc = this.handleDEC_C() # Decrement C "DEC C"
+    of Instruction.DEC_C: this.registers.pc = this.handleDEC_C() # Decrement C "DEC C"
     of Instruction.LD_C_N: this.registers.pc = this.handleLD_C_N() # Load 8-bit immediate into C "LD C,n"
     # of Instruction.RRCA: this.registers.pc = this.handleRRCA() # Rotate A right with carry "RRC A"
     of Instruction.STOP: this.registers.pc = this.handleSTOP() # Stop processor "STOP"
@@ -903,7 +931,7 @@ proc execute(this: var CPU, instruction: Instruction): uint16 =
     # of Instruction.CP_L: this.registers.pc = this.handleCP_L() # Compare L against A "CP L"
     # of Instruction.CP_HLP: this.registers.pc = this.handleCP_HLP() # Compare value pointed by HL against A "CP (HL"
     # of Instruction.CP_A: this.registers.pc = this.handleCP_A() # Compare A against A "CP A"
-    # of Instruction.RET_NZ: this.registers.pc = this.handleRET_NZ() # Return if last result was not zero "RET NZ"
+    of Instruction.RET_NZ: this.registers.pc = this.handleRET_NZ() # Return if last result was not zero "RET NZ"
     of Instruction.POP_BC: this.registers.pc = this.handlePOP_BC() # Pop 16-bit value from stack into BC "POP BC"
     # of Instruction.JP_NZ_NN: this.registers.pc = this.handleJP_NZ_NN() # Absolute jump to 16-bit location if last result was not zero "JP NZ,nn"
     of Instruction.JP_NN: this.registers.pc = this.handleJP_NN() # Absolute jump to 16-bit location "JP nn"
