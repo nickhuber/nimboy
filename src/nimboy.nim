@@ -83,7 +83,8 @@ proc main() =
   cpu.reset()
 
   while true:
-    if cpu.stopped:
+    # TODO: This is a hack to just see something
+    if cpu.bus.retrieve(0xFF40) != 0x00:
       render.setDrawColor(255, 255, 255, 255)
       render.clear()
       for t in 0..383:
@@ -102,8 +103,6 @@ proc main() =
               cast[cint](y + ((t div 19) * 8))
             )
       render.present()
-      cpu.stopped = false
-    else:
-      cpu.step()
+    cpu.step()
 
 main()

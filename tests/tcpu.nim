@@ -46,7 +46,7 @@ suite "CPU test suite":
 
   suite "LD_BC_NN instruction (0x01)":
     setup:
-      init(cpu, [Instruction.LD_BC_NN.ord().uint8, 0x12, 0x34])
+      init(cpu, [Instruction.LD_BC_NN.ord().uint8, 0x34, 0x12])
 
     test "increases PC by 3":
       cpu.step()
@@ -54,7 +54,9 @@ suite "CPU test suite":
 
     test "BC register is set, little endian":
       cpu.step()
-      check(cpu.registers.get_bc() == 0x3412)
+      check(cpu.registers.get_bc() == 0x1234)
+      check(cpu.registers.b == 0x12)
+      check(cpu.registers.c == 0x34)
 
     test "flags aren't modified":
       cpu.registers.f.carry = true
@@ -95,7 +97,7 @@ suite "CPU test suite":
   suite "INC_BC instruction (0x03)":
     setup:
       init(cpu, [Instruction.INC_BC.ord().uint8])
-      cpu.registers.set_bc(0x3412)
+      cpu.registers.set_bc(0x1234)
 
     test "increases PC by 1":
       cpu.step()
@@ -103,7 +105,9 @@ suite "CPU test suite":
 
     test "increases BC by 1":
       cpu.step()
-      check(cpu.registers.get_bc() == 0x3413)
+      check(cpu.registers.get_bc() == 0x1235)
+      check(cpu.registers.b == 0x12)
+      check(cpu.registers.c == 0x35)
 
     test "flags aren't modified":
       cpu.registers.f.carry = true
@@ -404,3 +408,73 @@ suite "CPU test suite":
       check(cpu.registers.f.half_carry)
       check(cpu.registers.f.subtract)
       check(cpu.registers.f.zero)
+
+  suite "DEC_BC instruction (0x0B)":
+    setup:
+      init(cpu, [Instruction.DEC_BC.ord().uint8])
+      cpu.registers.set_bc(0x3412)
+
+    test "increases PC by 1":
+      cpu.step()
+      check(cpu.registers.pc == 1)
+
+    test "BC is reduced by 1":
+      cpu.step()
+      check(cpu.registers.get_bc() == 0x3411)
+
+    test "flags aren't modified":
+      cpu.registers.f.carry = true
+      cpu.registers.f.half_carry = true
+      cpu.registers.f.subtract = true
+      cpu.registers.f.zero = true
+      cpu.step()
+      check(cpu.registers.f.carry)
+      check(cpu.registers.f.half_carry)
+      check(cpu.registers.f.subtract)
+      check(cpu.registers.f.zero)
+
+  suite "RLCA instruction (0x0F)":
+    setup:
+      init(cpu, [Instruction.RRCA.ord().uint8])
+
+    test "increases PC by 1":
+      cpu.step()
+      check(cpu.registers.pc == 1)
+
+    test "A is rotated right":
+      cpu.registers.a = 0b00100000
+      cpu.step()
+      check(cpu.registers.a == 0b00010000)
+
+    test "bit 0 rotates to bit 7":
+      cpu.registers.a = 0b00000001
+      cpu.step()
+      check(cpu.registers.a == 0b10000000)
+
+    test "clears all flags if no carry happens":
+      cpu.registers.a = 0b00000010
+      cpu.registers.f.carry = true
+      cpu.registers.f.half_carry = true
+      cpu.registers.f.subtract = true
+      cpu.registers.f.zero = true
+      cpu.step()
+      check(not cpu.registers.f.carry)
+      check(not cpu.registers.f.half_carry)
+      check(not cpu.registers.f.subtract)
+      check(not cpu.registers.f.zero)
+
+    test "sets carry flag if a carry happens":
+      cpu.registers.a = 0b00000001
+      cpu.step()
+      check(cpu.registers.f.carry)
+      check(not cpu.registers.f.half_carry)
+      check(not cpu.registers.f.subtract)
+      check(not cpu.registers.f.zero)
+
+    test "doesn't set zero even if A is zero":
+      cpu.registers.a = 0b00000000
+      cpu.step()
+      check(not cpu.registers.f.carry)
+      check(not cpu.registers.f.half_carry)
+      check(not cpu.registers.f.subtract)
+      check(not cpu.registers.f.zero)
