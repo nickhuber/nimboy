@@ -8,7 +8,7 @@ import registers
 
 
 type
-  CPU = object
+  CPU* = ref object
     registers*: Registers
     bus*: MemoryBus
     stopped*: bool
@@ -1058,6 +1058,3 @@ proc reset*(this: var CPU): void =
 proc step*(this: var CPU): void =
   let instruction_byte = this.bus.retrieve(this.registers.pc)
   this.registers.pc = this.execute(Instruction(instruction_byte))
-
-
-export CPU

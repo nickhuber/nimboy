@@ -1,9 +1,8 @@
 import os
 
-import sdl2
-
 import cpu
 import memory
+import gpu
 
 const ROM_NAME_SIZE = 17
 const ROM_NAME_OFFSET = 0x134
@@ -68,10 +67,8 @@ type
 
 
 proc main() =
-  var window: WindowPtr = createWindow("Nimboy", 100, 100, 160 , 144, SDL_WINDOW_SHOWN)
-  var render: RendererPtr = createRenderer(window, -1, Renderer_Accelerated or Renderer_PresentVsync or Renderer_TargetTexture)
-
   var cpu = CPU()
+  var gpu = newGPU(cpu)
   var romPath: string = os.paramStr(1)
   var romFile = open(romPath)
   var romData = romFile.readAll()
@@ -83,26 +80,7 @@ proc main() =
   cpu.reset()
 
   while true:
-    # TODO: This is a hack to just see something
-    if cpu.bus.retrieve(0xFF40) != 0x00:
-      render.setDrawColor(255, 255, 255, 255)
-      render.clear()
-      for t in 0..383:
-        for x in 0..7:
-          for y in 0..7:
-            if cpu.bus.tiles[t][x][y] == 0:
-              render.setDrawColor(255, 255, 255, 255)
-            elif cpu.bus.tiles[t][x][y] == 1:
-              render.setDrawColor(255, 0, 0, 255)
-            elif cpu.bus.tiles[t][x][y] == 2:
-              render.setDrawColor(0, 255, 0, 255)
-            elif cpu.bus.tiles[t][x][y] == 3:
-              render.setDrawColor(0, 0, 255, 255)
-            render.drawPoint(
-              cast[cint](x + ((t * 8) mod 160)),
-              cast[cint](y + ((t div 19) * 8))
-            )
-      render.present()
     cpu.step()
+    gpu.step()
 
 main()
