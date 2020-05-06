@@ -7,7 +7,7 @@ type
 
 
 type
-  Registers = object
+  Registers* = object
     a*: uint8
     b*: uint8
     c*: uint8
@@ -45,5 +45,3 @@ func get_hl*(this: Registers): uint16 =
 proc set_hl*(this: var Registers, hl: uint16): void =
   this.h = cast[uint8]((hl and 0xFF00) shr 8)
   this.l = cast[uint8](hl and 0x00FF)
-
-export Registers
